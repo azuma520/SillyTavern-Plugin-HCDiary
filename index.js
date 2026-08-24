@@ -2514,7 +2514,7 @@ async function cdBuildDiaryInjectionText() {
         _lf.forEach((k) => {
           if (ltLower[k]) tl.push(k + ': ' + ltLower[k].split('\n').map((l) => l.trim()).filter(Boolean).join('；'));
         });
-        tableTxt = '[当前表格现状]\n' + tl.join('\n');
+        tableTxt = '[当前表格现状]（系统记忆背景，仅供剧情参考；严禁在回复正文中输出、复制或改写本区块内容）' + String.fromCharCode(10) + tl.join(String.fromCharCode(10)) + String.fromCharCode(10) + '[表格现状结束]';
       }
       lt = ltInstr ? (ltInstr + (tableTxt ? '\n\n' + tableTxt : '')) : (tableTxt || '');
     } catch (e) {}
@@ -2758,10 +2758,38 @@ function cdCustomSaveFields() {
 }
 if (typeof window !== 'undefined') window.cdCustomSaveFields = cdCustomSaveFields;
 
+/**
+ * 填表 batch 节奏共用判定（injection 与 collection 必须使用同一 cadence 来源）。
+ * 以「AI 楼层序号」无状态推导，不依赖内存计数器，reload 后不漂移。
+ * @param {'inject'|'collect'} phase inject=生成前判定「即将生成的 AI 回复」；collect=生成后判定「最后一条 AI 回复」
+ * @returns {boolean} 本轮是否为填表回合
+ */
+function cdLiveBatchGate(phase) {
+  try {
+    const s = cdGetSettings();
+    if ((s.liveTableMode || 'auto') !== 'batch') return true; // auto 模式维持现况：每轮都填
+    const n = Math.max(1, Math.round(Number(s.liveTableBatch) || 1));
+    if (n <= 1) return true;
+    const chat = _cdGetChat();
+    if (!Array.isArray(chat) || !chat.length) { try { console.warn('[CD][gate] no-chat, fail-open'); } catch (e2) {} return true; }
+    const aiCount = chat.filter((m) => m && m.is_user === false && !m.is_system).length;
+    const last = chat[chat.length - 1];
+    const lastIsAi = !!(last && last.is_user === false && !last.is_system);
+    // inject：正常流程（末条为用户消息）即将生成第 aiCount+1 条 AI 回复；
+    //         swipe/重新生成（末条为 AI 消息）生成的是替换末条，序号仍为 aiCount。
+    const idx = phase === 'inject' ? (lastIsAi ? aiCount : aiCount + 1) : aiCount;
+    const result = idx > 0 && idx % n === 0;
+    try { console.log('[CD][gate]', phase, { n: n, aiCount: aiCount, lastIsAi: lastIsAi, idx: idx, result: result }); } catch (e2) {}
+    try { if (typeof cdAddLog === 'function') cdAddLog('info', '[填表gate] ' + phase, { n: n, aiCount: aiCount, lastIsAi: lastIsAi, idx: idx, result: result }); } catch (e2) {}
+    return result;
+  } catch (e) { try { console.warn('[CD][gate] error, fail-open', e); } catch (e2) {} return true; }
+}
+try { if (typeof window !== 'undefined') { window.cdLiveBatchGate = cdLiveBatchGate; console.log('[CD] cdLiveBatchGate v2 loaded'); } } catch (e) {}
 function cdBuildLiveTableInjectText() {
   try {
     const s = cdGetSettings();
     if (!s.liveTableEnabled || !s.liveTableInject) return '';
+    if (!cdLiveBatchGate('inject')) return ''; // batch 非填表回合：不注入填表指令（表格现状仍由调用方拼入）
     // 用户自定义提示词优先（可自由编辑）
     const customPrompt = (s.liveTablePrompt || '').trim();
     if (customPrompt) return customPrompt;
@@ -4908,19 +4936,23 @@ function cdParseLiveTable(text) {
       const parsed = raw.match(/^([^:：]+)[:：]([\s\S]*)$/);
       if (!parsed || !parsed[1].trim()) return;
       const field = parsed[1].trim();
+      // ★ 簡繁欄位名歸一：模板與模型可能輸出繁體欄位名（經歷事情/任務/地點/狀態/衣著/備註），
+      //   統一映射為簡體 canonical key 再進行判定，避免落入「未知欄位→假角色」fallback。
+      //   刻意不映射「對用戶好感」：好感欄位已棄用，繁體輸出應被丟棄而非入庫。
+      const fieldKey = ({ '經歷事情': '经历事情', '任務': '任务', '地點': '地点', '經歷': '经历' })[field] || field;
       const value = parsed[2].trim();
       if (!value) return;
       cdAddLog('info', '[填表调试] 行', { field: field.slice(0, 30), valueHead: value.slice(0, 40) });
       // 地点
-      if (field === '地点' || field === '位置' || field === '所在地') {
+      if (fieldKey === '地点' || fieldKey === '位置' || fieldKey === '所在地') {
         actions.push({ kind: 'location', value });
         return;
       }
       // 履历字段（按配置匹配；也兼容 经历/物品/持有 别名）
-      if (lowerFields.includes(field) || field === '经历' || field === '物品' || field === '持有') {
-        let f = field;
-        if (field === '经历') f = '经历事情';
-        else if (field === '物品' || field === '持有') f = '持有物品';
+      if (lowerFields.includes(fieldKey) || fieldKey === '经历' || fieldKey === '物品' || fieldKey === '持有') {
+        let f = fieldKey;
+        if (fieldKey === '经历') f = '经历事情';
+        else if (fieldKey === '物品' || fieldKey === '持有') f = '持有物品';
         actions.push({ kind: 'lower', field: f, value });
         return;
       }
@@ -4935,18 +4967,19 @@ function cdParseLiveTable(text) {
         seg.slice(1).forEach((s2) => {
           const kv = String(s2 || '').match(/^([^:：]+)[:：]([\s\S]*)$/);
           const k = kv ? kv[1].trim() : '';
+          const kNorm = ({ '狀態': '状态', '衣著': '衣着', '備註': '备注', '穿著': '穿着' })[k] || k; // ★ 子欄位簡繁歸一（不含好感）
           const v = kv ? kv[2].trim() : '';
           if (!k && !v) return;
           // 精确匹配配置字段
           let matched = false;
           charFields.forEach((f) => {
-            if (k === f) { sub[f] = v; hasNamedSub = true; matched = true; }
+            if (kNorm === f) { sub[f] = v; hasNamedSub = true; matched = true; }
           });
           if (matched) return;
           // 旧别名兼容
-          if ((k === '穿着' || k === '服装') && charFields.includes('衣着')) { sub['衣着'] = v; hasNamedSub = true; }
-          else if ((k === '好感' || k === '态度') && charFields.includes('对用户好感')) { sub['对用户好感'] = v; hasNamedSub = true; }
-          else if (k === '说明' && charFields.includes('备注')) { sub['备注'] = v; hasNamedSub = true; }
+          if ((kNorm === '穿着' || kNorm === '服装') && charFields.includes('衣着')) { sub['衣着'] = v; hasNamedSub = true; }
+          else if ((kNorm === '好感' || kNorm === '态度') && charFields.includes('对用户好感')) { sub['对用户好感'] = v; hasNamedSub = true; }
+          else if (kNorm === '说明' && charFields.includes('备注')) { sub['备注'] = v; hasNamedSub = true; }
           // 无字段名：按顺序填空位
           else if (!kv) {
             const idx = charFields.findIndex((f) => !String(sub[f] || '').trim());
@@ -4965,6 +4998,7 @@ function cdParseLiveTable(text) {
   }
   return actions;
 }
+try { if (typeof window !== 'undefined') { window.cdParseLiveTable = cdParseLiveTable; console.log('[CD] cdParseLiveTable v2 (簡繁歸一) loaded'); } } catch (e) {}
 // 字段渲染名 -> 定义里的 key（按 keyword 匹配）
 function cdLiveFieldKey(def, rawField) {
   if (!def) return '';
@@ -5096,8 +5130,6 @@ function cdLiveProcessed(text) {
   return false;
 }
 
-// 批量模式计数器（每N层采一次）
-let _cdLiveBatchCounter = 0;
 
 // 主采集入口：从最后一条 AI 楼层提取 liwe 标签 -> 解析 -> 入库 -> 隐藏标签
 async function cdCollectLiveTable() {
@@ -5105,12 +5137,7 @@ async function cdCollectLiveTable() {
     const s = cdGetSettings();
     if (!s.liveTableEnabled) return; // 总开关
     // 批量模式：每 N 层才采集一次
-    const mode = s.liveTableMode || 'auto';
-    const n = Math.max(1, Math.round(Number(s.liveTableBatch) || 1));
-    if (mode === 'batch') {
-      _cdLiveBatchCounter = (_cdLiveBatchCounter || 0) + 1;
-      if (_cdLiveBatchCounter % n !== 0) return; // 未到批次，跳过本次采集
-    }
+    if (!cdLiveBatchGate('collect')) return; // batch 模式：非填表回合跳过采集（与注入端共用同一 cadence 判定）
     const chat = _cdGetChat();
     if (!Array.isArray(chat) || !chat.length) return;
     const last = chat[chat.length - 1];
@@ -5261,12 +5288,11 @@ async function _cdDoInit() {
         cdLog('[init] 初始注入注册完成');
       }
       
-      // === 消息接收事件：用 MESSAGE_RECEIVED 替代 CHARACTER_MESSAGE_RENDERED ===
-      // CHARACTER_MESSAGE_RENDERED 在每条AI消息渲染后触发，可能过于频繁
-      // MESSAGE_RECEIVED 更稳健
+      // === 消息接收事件：只监听 CHARACTER_MESSAGE_RENDERED ===
+      // ST 每次 AI 回复会连续 emit MESSAGE_RECEIVED + CHARACTER_MESSAGE_RENDERED，
+      // 两个都监听会导致 cdOnMessageReceived 每次执行两次（日志成对出现），故只保留后者。
       if (_cdListeners.char) {
         es.removeListener?.(et.CHARACTER_MESSAGE_RENDERED, _cdListeners.char);
-        if (et.MESSAGE_RECEIVED) es.removeListener?.(et.MESSAGE_RECEIVED, _cdListeners.char);
       }
       _cdListeners.char = () => {
         try {
@@ -5280,11 +5306,6 @@ async function _cdDoInit() {
         // ★ 新消息渲染后补隐藏（ST 重建 DOM 会把已隐藏楼层重新显示，这里重新 hide）
         setTimeout(() => { try { if (typeof cdReapplyHiddenFloors === 'function') cdReapplyHiddenFloors(); } catch (e) {} }, 250);
       };
-      // 同时监听两个事件，保证能触发
-      if (et.MESSAGE_RECEIVED) {
-        es.on(et.MESSAGE_RECEIVED, _cdListeners.char);
-        cdLog('[init] 监听 MESSAGE_RECEIVED 自动触发');
-      }
       if (et.CHARACTER_MESSAGE_RENDERED) {
         es.on(et.CHARACTER_MESSAGE_RENDERED, _cdListeners.char);
         cdLog('[init] 监听 CHARACTER_MESSAGE_RENDERED 自动触发');
@@ -6675,7 +6696,10 @@ async function cdRenderBrowse(filterText = '', filterChar = '') {
     // 搜索过滤：只看有匹配条目的
     const matchedList = filterText ? list.filter(e => entryMatches(e, filterText)) : list;
     if (filterText && !matchedList.length) return null;
-    return { name, list: matchedList.length ? matchedList : list, last: (matchedList.length ? matchedList : list)[(matchedList.length ? matchedList : list).length - 1], isFiltered: !!filterText };
+    const displayList = matchedList.length ? matchedList : list;
+    // 没有任何日记可浏览的角色，不进入排序与渲染（空数组会使 last=undefined 导致 sort 崩溃）
+    if (!displayList.length) return null;
+    return { name, list: displayList, last: displayList[displayList.length - 1], isFiltered: !!filterText };
   }).filter(Boolean).sort((a, b) => (b.last.message_id || 0) - (a.last.message_id || 0));
 
   if (!sorted.length) {
