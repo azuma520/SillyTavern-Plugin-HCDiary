@@ -9318,6 +9318,7 @@ async function cdRenderSettings() {
 
     <div class="cds-card">
       <div class="cds-ghead"><span class="cds-gico"><i class="fa-solid fa-sliders"></i></span><span><span class="cds-gtitle">运行参数</span><span class="cds-gsub">自动处理的频率与稳定性</span></span></div>
+      <div class="cds-row"><span class="cds-lab">自动总结 <span class="cds-hint">关闭后仅手动写日记</span></span><span class="cds-ctrl"><label class="cd-switch"><input type="checkbox" id="cd-s-autosummary" ${s.autoSummary !== false ? 'checked' : ''}><span class="cd-slider"></span></label></span></div>
       <div class="cds-row"><span class="cds-lab">处理频率 <span class="cds-hint">每 N 条 AI 消息</span></span><span class="cds-ctrl"><input type="number" id="cd-s-interval" value="${s.interval}" min="1" max="100" class="cd-input"></span></div>
       <div class="cds-row"><span class="cds-lab">记忆锚点偏移 <span class="cds-hint">跳过末尾 N 条</span></span><span class="cds-ctrl"><input type="number" id="cd-s-offset" value="${s.memoryOffset === undefined ? 2 : s.memoryOffset}" min="0" max="20" class="cd-input" style="width:52px;"></span></div>
       <div class="cds-row"><span class="cds-lab">临时角色转正 <span class="cds-hint">出场 N 次</span></span><span class="cds-ctrl"><input type="number" id="cd-s-cameo" value="${s.cameoThreshold}" min="1" max="50" class="cd-input"></span></div>
@@ -9558,6 +9559,7 @@ async function cdRenderSettings() {
     cdSaveSettings({
       enabled: $('#cd-s-enabled').is(':checked'),
       interval: parseInt($('#cd-s-interval').val(), 10) || 5,
+      autoSummary: $('#cd-s-autosummary').is(':checked'),
       memoryOffset: Math.max(0, parseInt($('#cd-s-offset').val(), 10) || 2),
       cameoThreshold: parseInt($('#cd-s-cameo').val(), 10) || 3,
       temperature: parseFloat($('#cd-s-temp').val()) || 0.7,
