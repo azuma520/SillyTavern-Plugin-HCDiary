@@ -18,6 +18,24 @@
 
 ---
 
+## ⚠️ 本機 Git 分支策略（2026-09-06 起，azuma520 本地；改代碼前先讀）
+
+本目錄自己是一個 git repo（`git rev-parse --show-toplevel` 就是這裡），與 SillyTavern 主 repo 無關。
+
+| 分支 | 追蹤 | 內容 | 規矩 |
+|---|---|---|---|
+| `main` | `origin/main`（上游作者 `zhaoyichan/SillyTavern-Plugin-HCDiary`） | 純上游最新版（2026-09-06 為 v2.13.0） | **只看不 checkout**——checkout 會讓正在跑的 ST 直接載到新版（與 running 差 45 commit、index.js 約 8,700 行） |
+| `running` | `fork/running`（`azuma520/SillyTavern-Plugin-HCDiary`） | 實際在跑的 v2.7.6 + 本地修補：`2e07c0e` batch 注入採集同步、`38dd3ec` mood 簡繁歸一、`aa95e16` 忽略 .bak | **所有自用開發的基底** |
+| feature branch | `fork/<name>` | 單一開發項 | 一律從 `running` 開：`git switch -c <name>`；完成後 `git push -u fork <name>` |
+
+- 動手前 `git branch --show-current` 必須是 `running` 或其 feature branch，且 `git status` 乾淨。
+- 回退以 git 為主（切回 `running`）；上方「先備份 .bak」照做，但 .bak 只是最後保險（已被 `.gitignore` 忽略）。
+- 要貢獻上游：**不拿 `running` 直接 PR**。從最新 `main` 另開 PR branch，把已驗證的 commit cherry-pick 或重新移植過去、在新版重測、再從 fork 對上游開 PR；衝突時重新移植設計意圖、不硬解。
+- 本節取代下方「四、发布到 GitHub」的 Contents API 流程（那是作者的 Android 環境）；本機發布 = push 到 `fork`。
+- 同一份策略也記在 SillyTavern worktree 的 `CLAUDE.md`「RP 記憶系統工作 › 硬性要求」與 `RP記憶/RP記憶系統_設計基礎.md`「資料在哪」。
+
+---
+
 ## 一、项目是什么
 
 - 插件名：**角色日记（Character Diary）**，别名 HCDiary / `character-diary` / LIWE·RAG 记忆引擎
