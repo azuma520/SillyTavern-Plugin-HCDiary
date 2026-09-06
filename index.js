@@ -1952,6 +1952,17 @@ async function cdGetData() {
     // 数据分片/基线修复（仅当读到真实数据时执行）
     if (stored) {
       const result = Object.assign(empty, stored);
+      // ★ 既有資料 mood 簡繁歸一（讀取時就地修正；隨下一次 cdSaveData 落盤）
+      try {
+        let _moodFixed = 0;
+        for (const _list of Object.values(result.diaries || {})) {
+          if (!Array.isArray(_list)) continue;
+          for (const _e of _list) {
+            if (_e && _e.mood) { const _n = cdNormalizeMood(_e.mood); if (_n !== _e.mood) { _e.mood = _n; _moodFixed++; } }
+          }
+        }
+        if (_moodFixed) cdLog('cdGetData: mood 簡繁歸一', {修正: _moodFixed});
+      } catch (_m) { /* 歸一失敗不影響讀取 */ }
       const chat = _cdGetChat();
       if (chat.length > 0) {
         if (result.lastFloor > chat.length - 1) {
@@ -2196,7 +2207,7 @@ function mergeDiaries(data, npcs, windowFloors, s) {
       turn: npc.turn ?? topFloor,
       date: npc.date || '',
       entry: _newEntry,
-      mood: npc.mood || '',
+      mood: cdNormalizeMood(npc.mood),
       attitude_to_user: npc.attitude_to_user || '',
       secret: npc.secret || '',
       key_events: Array.isArray(npc.key_events) ? npc.key_events : [],
@@ -7108,7 +7119,7 @@ function cdShowEntryEditor(name, idx, entry, data) {
     const updated = {
       ...entry,
       date: overlay.find('.cd-editor-date').val().trim(),
-      mood: overlay.find('.cd-editor-mood').val().trim(),
+      mood: cdNormalizeMood(overlay.find('.cd-editor-mood').val()),
       attitude_to_user: overlay.find('.cd-editor-attitude').val().trim(),
       entry: overlay.find('.cd-editor-entry').val().trim(),
       secret: overlay.find('.cd-editor-secret').val().trim(),
@@ -7187,6 +7198,27 @@ function cdShowEntryEditor(name, idx, entry, data) {
     }
   });
 }
+
+/** ★ mood 簡繁歸一：prompt 列舉值是簡體（开心/难过/生气/紧张/平静/困惑/惊讶/思念），
+ *  但模型會跟隨劇情語言輸出繁體（開心/緊張/平靜…），落庫後同一情緒分裂成兩個 key，
+ *  心情圖表 / 熱力圖 / emoji 的簡體正則全部漏算。統一在寫入與讀取時把繁體字映射回簡體 canonical。
+ *  只覆蓋情緒詞會用到的字，不是通用簡繁轉換。 */
+const CD_MOOD_T2S = {
+  '開':'开','難':'难','過':'过','氣':'气','緊':'紧','張':'张','靜':'静','驚':'惊','訝':'讶',
+  '興':'兴','樂':'乐','悅':'悦','奮':'奋','滿':'满','歡':'欢','傷':'伤','絕':'绝','後':'后',
+  '憤':'愤','惱':'恼','厭':'厌','惡':'恶','慮':'虑','擔':'担','懼':'惧','懷':'怀','鬱':'郁',
+  '憂':'忧','戀':'恋','愛':'爱','憐':'怜','慚':'惭','獨':'独','寧':'宁','願':'愿','點':'点',
+  '帶':'带','著':'着','複':'复','雜':'杂','無':'无','頭':'头','溫':'温','尷':'尴','為':'为',
+  '覺':'觉','煩':'烦','躁':'躁','鬆':'松','輕':'轻','緒':'绪','悶':'闷','悽':'凄','淒':'凄',
+};
+function cdNormalizeMood(mood) {
+  const s = (mood == null) ? '' : String(mood).trim();
+  if (!s) return '';
+  let out = '';
+  for (const ch of s) out += (CD_MOOD_T2S[ch] || ch);
+  return out;
+}
+try { if (typeof window !== 'undefined') window.cdNormalizeMood = cdNormalizeMood; } catch (e) {}
 
 function cdMoodEmoji(mood) {
   if (!mood) return '';
@@ -8611,7 +8643,7 @@ async function cdRegenSingleEntry(name, idx) {
       turn: target.turn ?? prev.turn ?? floor,
       date: target.date || prev.date || '',
       entry: target.entry || prev.entry || '',
-      mood: target.mood || prev.mood || '',
+      mood: cdNormalizeMood(target.mood || prev.mood),
       attitude_to_user: target.attitude_to_user || prev.attitude_to_user || '',
       secret: target.secret || prev.secret || '',
       key_events: Array.isArray(target.key_events) ? target.key_events : (prev.key_events || []),

@@ -108,6 +108,16 @@
 
 ### 历史记录
 
+#### 2026-09-06 · v2.7.6（mood 简繁归一）
+- 改动文件：index.js
+- 改动内容：
+  1. 新增 `CD_MOOD_T2S` 字表 + `cdNormalizeMood()`（位于 `cdMoodEmoji` 之前）：仅覆盖情绪词会用到的繁体字，映射回 prompt 列举值的简体 canonical
+  2. 三个写入点接归一：`mergeDiaries` 落库、编辑器保存、重生成替换
+  3. `cdGetData` 读取时对既有 `diaries[*].mood` 就地归一（随下一次 `cdSaveData` 落盘），并打 `cdGetData: mood 簡繁歸一 {修正: N}` 日志
+- 根因/动机：prompt 列举值是简体，但模型跟随剧情语言输出繁体（實測 `开心` 200 vs `開心` 120、`紧张`/`緊張` 各 16、`平静` 32 vs `平靜` 8），落库未正规化；心情折线图 / 热力图 / emoji 的简体正则全部漏算繁体条目
+- 验证：node --check ✅ / grep cdNormalizeMood=6 ✅ / 已知答案 14/14 ✅ / 真实聊天档 424 笔前后总数对账一致（8 key → 5 key）✅ / 酒馆重载后记忆体 `diaries['范婼慧']` 50 笔全简体（硬盘同档仍 15 笔繁体）✅ / `cdGetData: mood 簡繁歸一` 日志未在 console 看到（原因未查）
+- 备份：index.js.bak_mood_normalize_20260906_122359
+
 #### 2026-08-21 · v2.7.5（本次会话）
 - 改动文件：index.js
 - 改动内容：
