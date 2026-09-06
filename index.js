@@ -220,6 +220,7 @@ const DEFAULT_SETTINGS = {
   diaryCharFilter : false,       // 按登场人物注入近期日记（正则捕获剧情中出现的角色，只推这些角色的近期日记，替代全量/向量）
   diaryCharLimit  : 3,           // 按登场人物时，每个角色的近期日记篇数
   diaryCharWindow : 16,          // 登场判定窗口：取最近 N 条消息判定“本次登场角色”
+  includeUserMessagesInDiary : true,  // 日记剧情片段纳入玩家原始楼层（范围：本批首个AI楼层之前最近一个AI楼层之后 ~ 本批末个AI楼层）；仅影响日记 prompt 组装，不进 processedFloors
   filterTags      : [             // 内容过滤标签对（不发送给AI总结）
     { start: '<user_thought>', end: '</user_thought>' },
     { start: '', end: '' },
@@ -758,7 +759,30 @@ async function cdBuildDiaryPrompt(windowFloors, data, s) {
   }).filter(Boolean).join('\n');
   // ★ 楼层文本经过标签过滤
   const tags = s.filterTags || [];
-  const scene = windowFloors.map(m => `[#${m.message_id} ${m.name}] ${cdFilterTags(m.mes, tags)}`).join('\n\n');
+  // ★ 玩家原始楼层（includeUserMessagesInDiary）：只在日记 prompt 组装时从聊天数组读取，
+  //   不进 windowFloors / processedFloors / lastFloor / _lastDiaryChatLength，关系与剧情档案两路不受影响。
+  //   范围：本批第一个 AI 楼层之前最近一个 AI 楼层之后 ~ 本批最后一个 AI 楼层（含）。
+  let _userFloors = [];
+  if (s.includeUserMessagesInDiary !== false && windowFloors.length) {
+    try {
+      const _chat = _cdGetChat();
+      const _firstAi = windowFloors[0].message_id;
+      const _lastAi  = windowFloors[windowFloors.length - 1].message_id;
+      let _startExcl = -1; // 往前找最近一个 AI 楼层；找不到则从聊天数组开头算起
+      for (let i = _firstAi - 1; i >= 0; i--) {
+        const m = _chat[i];
+        if (m && !m.is_user && !m.is_system) { _startExcl = i; break; }
+      }
+      for (let i = _startExcl + 1; i <= _lastAi && i < _chat.length; i++) {
+        const m = _chat[i];
+        if (m && m.is_user) _userFloors.push({ message_id: i, name: m.name || '', mes: m.mes || '', is_user: true });
+      }
+    } catch (e) { if (typeof cdWarn === 'function') cdWarn('日记：读取玩家楼层失败（降级为仅 AI 楼层）', e); _userFloors = []; }
+  }
+  // ★ 场景行显式标示来源：[#楼号 Player／名字] / [#楼号 Assistant／名字]；
+  //   两态皆用此格式，使开关开/关的唯一差异是有无 Player 行。
+  const _sceneRows = windowFloors.concat(_userFloors).sort((a, b) => a.message_id - b.message_id);
+  const scene = _sceneRows.map(m => `[#${m.message_id} ${m.is_user ? 'Player' : 'Assistant'}／${m.name}] ${cdFilterTags(m.mes, tags)}`).join('\n\n');
 
   // ★ 按登场人物捕获（方案B）：正则从剧情捕获登场角色，只推这些角色的近期日记（替代全量注入）
   let diaryMemory = memory;
@@ -795,11 +819,20 @@ async function cdBuildDiaryPrompt(windowFloors, data, s) {
       }
     } catch (e) { cdWarn('日记向量检索失败（降级为全量记忆）:', e); }
   }
+  // ★ 玩家角色名（取 ST 用户实际名，无则“主角”）：让模型知道哪个名字不该写日记
+  let _protNameDiary = '主角';
+  try {
+    const _ctxP = SillyTavern.getContext();
+    const _n1 = _ctxP && _ctxP.name1;
+    if (_n1 && String(_n1).trim()) _protNameDiary = String(_n1).trim();
+  } catch (e) {}
   const sys = [
     '你是一个"角色日记"记录员。阅读给定剧情片段, 为其中每个有名有戏份的登场角色, 以该角色第一人称主观视角写一篇日记。',
     '要求:',
     '- 只为有名字、有实际戏份的角色写。纯路人、无名群众忽略。',
     '- 不要为用户/玩家角色写日记。',
+    `- 玩家角色名：${_protNameDiary}（不为其写日记）。`,
+    '- 剧情片段每行标有楼号与来源（Player / Assistant）；请依来源与时间顺序理解剧情。角色回复中可能包含对前一则玩家言行的描述。',
     s.mainCardIsGM ? '- 如果某角色是旁白/系统/上帝视角/GM式叙述者, 不要为其写。' : '',
     '- 第一人称, 带该角色的情绪、私心、主观理解(可与事实有偏差)。同一事件不同角色可记得不同。',
     '- entry 是日记摘要, 不是剧情复述: 聚焦角色的心理活动、情绪、关系变化、关键决定。',
@@ -3157,6 +3190,21 @@ async function cdTestDiary() {
   cdAddLog('info', '测试: 楼层数 ' + testFloors.length, {起始: testFloors[0]?.message_id, 结束: testFloors[testFloors.length - 1]?.message_id});
   
   const diaryMsgs   = await cdBuildDiaryPrompt(testFloors, data, s);
+  // ★ 完整对照材料：日志面板 detail 会截到 500 字，这里把未截断内容留在 console 与 window
+  const _tdSys = (diaryMsgs[0] && diaryMsgs[0].content) || '';
+  const _tdUsr = (diaryMsgs[1] && diaryMsgs[1].content) || '';
+  const _tdSceneMark = '本次剧情片段:' + '\n';
+  const _tdSceneIdx = _tdUsr.indexOf(_tdSceneMark);
+  const _tdScene = _tdSceneIdx >= 0 ? _tdUsr.slice(_tdSceneIdx + _tdSceneMark.length).split('\n\n请输出 JSON。')[0] : '';
+  const _tdIncludeUser = s.includeUserMessagesInDiary !== false;
+  try {
+    window.__cdLastDiaryTest = {
+      at: new Date().toISOString(),
+      includeUser: _tdIncludeUser,
+      floors: testFloors.map(f => f.message_id),
+      scene: _tdScene, sys: _tdSys, usr: _tdUsr, response: null,
+    };
+  } catch (e) {}
 const relMsgs     = cdBuildRelationPrompt(testFloors, data, s);
     const archiveMsgs = await cdBuildArchivePrompt(testFloors, data, s);
   
@@ -3178,6 +3226,8 @@ const relMsgs     = cdBuildRelationPrompt(testFloors, data, s);
       if (tu.cacheHit !== undefined) { detail.缓存命中 = tu.cacheHit; detail.缓存未命中 = tu.cacheMiss; }
     }
     cdAddLog('info', '测试 [日记] API成功', detail);
+    try { if (window.__cdLastDiaryTest) window.__cdLastDiaryTest.response = diaryRes.value.text; } catch (e) {}
+    cdAddLog('info', '测试 [日记] 完整材料', { includeUser: _tdIncludeUser, usr: _tdUsr, response: diaryRes.value.text });
     try {
       const npcs = parseDiaryJson(diaryRes.value.text);
       cdAddLog('info', '测试 [日记] 解析成功', {角色数: npcs.length, 角色: npcs.map(n => n.name)});
@@ -9281,6 +9331,8 @@ async function cdRenderSettings() {
       <div class="cds-row"><span class="cds-lab"><i class="fa-regular fa-diagram-project"></i> 人物关系</span><span class="cds-ctrl"><label class="cd-switch"><input type="checkbox" id="cd-s-relation" ${s.enableRelation !== false ? 'checked' : ''}><span class="cd-slider"></span></label></span></div>
       <div class="cds-row"><span class="cds-lab"><i class="fa-regular fa-timeline"></i> 剧情档案</span><span class="cds-ctrl"><label class="cd-switch"><input type="checkbox" id="cd-s-archive" ${s.enableArchive !== false ? 'checked' : ''}><span class="cd-slider"></span></label></span></div>
       <div class="cds-row"><span class="cds-lab"><i class="fa-regular fa-book-bookmark"></i> 世界书联动</span><span class="cds-ctrl"><label class="cd-switch"><input type="checkbox" id="cd-s-worldbook" ${s.worldbookLink !== false ? 'checked' : ''}><span class="cd-slider"></span></label></span></div>
+      <div class="cds-row"><span class="cds-lab"><i class="fa-regular fa-comments"></i> 日记纳入玩家发言</span><span class="cds-ctrl"><label class="cd-switch"><input type="checkbox" id="cd-s-includeusermsgs" ${s.includeUserMessagesInDiary !== false ? 'checked' : ''}><span class="cd-slider"></span></label></span></div>
+      <div class="cds-row" style="opacity:.65;"><span class="cds-lab" style="font-size: calc(0.6rem * var(--cd-fs, 1));">开启后：写日记时的剧情片段同时包含玩家的原始发言（只影响日记生成材料，不改变楼层进度与其他两路）</span><span class="cds-ctrl"></span></div>
     </div>
 
     <div class="cds-card">
@@ -9520,6 +9572,7 @@ async function cdRenderSettings() {
       enableRelation: $('#cd-s-relation').is(':checked'),
       enableArchive: $('#cd-s-archive').is(':checked'),
       worldbookLink: $('#cd-s-worldbook').is(':checked'),
+      includeUserMessagesInDiary: $('#cd-s-includeusermsgs').is(':checked'),
       injectDiary: $('#cd-s-inject-diary').is(':checked'),
       diaryCharFilter: $('#cd-s-diarycharfilter').is(':checked'),
       diaryCharLimit: Math.max(1, parseInt($('#cd-s-diarycharlimit').val(), 10) || 3),
