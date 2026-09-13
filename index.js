@@ -405,6 +405,7 @@ function emptyData() {
     },
     cards: [],         // 剧情卡牌收集 [{ title, desc, time, icon }]
     snapshots: [],     // 历史快照 [{ time, type, diaryCount, relationCount, archiveUpdated, archiveEntryCount, chapterTitle }]
+    presenceAudit: [], // Presence Gate 稽核记录（diary-presence-gate）：{message_id,name,main,presence,written,reason,ts}，最多 200 笔
     focusRoles: [],    // 重点角色（手动指定）：[{ name, note }]，写日记/总结时引导 AI 围绕这些角色写
     archiveVectors: [], // 剧情档案向量库 [{ id, text, category, vector }]
     diaryVectors: [],  // 角色日记向量库 [{ id, role, text, vector }]
@@ -799,7 +800,7 @@ async function cdBuildDiaryPrompt(windowFloors, data, s) {
             lines.push(`【${role}】${e.date ? '第'+e.date : '第'+(e.turn!=null?e.turn:'?')+'楼'}: ${(e.entry||'').trim()}`);
           });
         });
-        if (lines.length) diaryMemory = '登场角色近期日记（按登场人物抽取）：\n' + lines.join('\n');
+        if (lines.length) diaryMemory = '已知角色近期记忆（按名字提及抽取, 被提及不代表在场）：\n' + lines.join('\n');
         else diaryMemory = memory;
       }
     } catch (e) { if (typeof cdWarn==='function') cdWarn('按登场人物捕获失败', e); diaryMemory = memory; }
@@ -834,6 +835,10 @@ async function cdBuildDiaryPrompt(windowFloors, data, s) {
     `- 玩家角色名：${_protNameDiary}（不为其写日记）。`,
     '- 剧情片段每行标有楼号与来源（Player / Assistant）；请依来源与时间顺序理解剧情。角色回复中可能包含对前一则玩家言行的描述。',
     `- key_events 每条必须以行为主体开头, 格式「主体：事件」。主体只能是"已知角色名单"中的主名或玩家角色名(${_protNameDiary}); 写日记的角色自己做的事也写主名, 不写"我"; 多人共同的行为写主要发起者。`,
+    '- 为每个候选角色判定 presence, 只能取以下四值之一: participated(实际参与本段事件或对话) / witnessed(确实在场, 能看到或听到本段事件, 但未直接参与) / mentioned_only(只是被他人提到名字, 本人没有感知本段事件) / absent(本段未出场、未感知)。',
+    '- 无法确认角色是否在场、是否感知到事件时, 一律判 absent。不要为角色创造其没有经历的第一人称体验。',
+    '- presence 为 mentioned_only 或 absent 的角色, 仍输出其 name 与 presence, 但 entry、secret 留空字符串, key_events 留空数组, 不写任何正文。',
+    '- presence 为 witnessed 的角色, 日记只能写该角色在场时确实能看到、听到或合理推知的内容; 不得写其无法感知的对话、动作或他人内心。',
     s.mainCardIsGM ? '- 如果某角色是旁白/系统/上帝视角/GM式叙述者, 不要为其写。' : '',
     '- 第一人称, 带该角色的情绪、私心、主观理解(可与事实有偏差)。同一事件不同角色可记得不同。',
     '- entry 是日记摘要, 不是剧情复述: 聚焦角色的心理活动、情绪、关系变化、关键决定。',
@@ -844,7 +849,7 @@ async function cdBuildDiaryPrompt(windowFloors, data, s) {
     '- 语言: 跟随剧情片段的主要语言。',
     '- 用 is_minor 标记角色重要性: 主角、重要配角、有名有戏份的 NPC 标 false; 仅出场一两句、无关紧要的纯路人标 true。',
     '严格只输出 JSON, 格式:',
-    '{"npcs":[{"name":"主名","aliases":["别名"],"is_minor":false,"date":"剧情时间或第N楼","turn":楼号数字,"entry":"第一人称正文(150字内)","mood":"心情(限用以下词之一：开心、难过、生气、紧张、平静、困惑、惊讶、思念)","attitude_to_user":"对用户态度","secret":"没说出口的心思","key_events":["主体：事件"],"relationship_with_others":{"某角色":"关系描述"}}]}',
+    '{"npcs":[{"name":"主名","aliases":["别名"],"is_minor":false,"presence":"participated|witnessed|mentioned_only|absent","date":"剧情时间或第N楼","turn":楼号数字,"entry":"第一人称正文(150字内)","mood":"心情(限用以下词之一：开心、难过、生气、紧张、平静、困惑、惊讶、思念)","attitude_to_user":"对用户态度","secret":"没说出口的心思","key_events":["主体：事件"],"relationship_with_others":{"某角色":"关系描述"}}]}',
   ].filter(Boolean).join('\n');
   // ★ 世界书联动：在函数体顶部异步获取登场角色的世界书设定（loadWorldInfo 为异步 API）
   let _worldbookTxtDiary = '';
@@ -2193,6 +2198,20 @@ function mergeDiaries(data, npcs, windowFloors, s) {
       cdLog('mergeDiaries: 黑名单角色，跳过', {角色: name, 主名: mainName});
       continue;
     }
+    // ★ Presence Gate（diary-presence-gate）：模型判定 presence，程序只放行 participated / witnessed；
+    //   mentioned_only / absent / 缺失 / 非法值一律不写入、不累计 cameo、不补别名（fail-closed）。重点角色不豁免。
+    //   每个候选写一笔 presenceAudit（store 顶层，最多 200 笔），不写入日记 entry。
+    if (!Array.isArray(data.presenceAudit)) data.presenceAudit = [];
+    const _presRaw = (npc.presence === undefined || npc.presence === null) ? '' : String(npc.presence).trim().toLowerCase();
+    const _presValid = ['participated', 'witnessed', 'mentioned_only', 'absent'].indexOf(_presRaw) >= 0;
+    const _presPass = _presRaw === 'participated' || _presRaw === 'witnessed';
+    const _audit = { message_id: topFloor, name: name, main: mainName, presence: _presValid ? _presRaw : (_presRaw || null), written: false, reason: !_presValid ? 'invalid_presence' : (_presPass ? 'ok' : 'presence_blocked'), ts: Date.now() };
+    data.presenceAudit.push(_audit);
+    if (data.presenceAudit.length > 200) data.presenceAudit = data.presenceAudit.slice(-200);
+    if (!_presPass) {
+      cdAddLog('info', '[PresenceGate] 拦截', { 角色: name, 主名: mainName, presence: _audit.presence, reason: _audit.reason, 楼层: topFloor });
+      continue;
+    }
     // ★ 重点角色强制保留：手动指定的重点角色（含别名匹配）即使被 AI 标为路人，也强制转正并写日记
     const _isFocus = Array.isArray(data.focusRoles) && data.focusRoles.some(function (f) {
       if (!f || !f.name) return false;
@@ -2248,6 +2267,8 @@ function mergeDiaries(data, npcs, windowFloors, s) {
       relationship_with_others: npc.relationship_with_others || {},
       message_id: topFloor,
     });
+    _audit.written = true;
+    cdAddLog('info', '[PresenceGate] 写入', { 角色: mainName, presence: _audit.presence, 楼层: topFloor });
   }
   data.lastFloor = Math.max(data.lastFloor ?? -1, topFloor);
   // ★ 记录当前 chat.length 作为下次检测新增楼层的基线
@@ -11594,7 +11615,7 @@ function cdCircleReveal(el, target, full, halfCb){
 
 
 
-/* ★ 按登场人物捕获：从剧情文本中匹配已有角色(主名+别名)，返回登场角色名列表
+/* ★ 候选角色抽取（按名字提及）：从剧情文本中匹配已有角色(主名+别名)，返回被提及的候选角色名列表（被提及不代表在场，在场与否由 presence 判定）
  */
 function cdCaptureCast(sceneText, data){
   data = data || null;
