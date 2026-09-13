@@ -833,6 +833,7 @@ async function cdBuildDiaryPrompt(windowFloors, data, s) {
     '- 不要为用户/玩家角色写日记。',
     `- 玩家角色名：${_protNameDiary}（不为其写日记）。`,
     '- 剧情片段每行标有楼号与来源（Player / Assistant）；请依来源与时间顺序理解剧情。角色回复中可能包含对前一则玩家言行的描述。',
+    `- key_events 每条必须以行为主体开头, 格式「主体：事件」。主体只能是"已知角色名单"中的主名或玩家角色名(${_protNameDiary}); 写日记的角色自己做的事也写主名, 不写"我"; 多人共同的行为写主要发起者。`,
     s.mainCardIsGM ? '- 如果某角色是旁白/系统/上帝视角/GM式叙述者, 不要为其写。' : '',
     '- 第一人称, 带该角色的情绪、私心、主观理解(可与事实有偏差)。同一事件不同角色可记得不同。',
     '- entry 是日记摘要, 不是剧情复述: 聚焦角色的心理活动、情绪、关系变化、关键决定。',
@@ -843,7 +844,7 @@ async function cdBuildDiaryPrompt(windowFloors, data, s) {
     '- 语言: 跟随剧情片段的主要语言。',
     '- 用 is_minor 标记角色重要性: 主角、重要配角、有名有戏份的 NPC 标 false; 仅出场一两句、无关紧要的纯路人标 true。',
     '严格只输出 JSON, 格式:',
-    '{"npcs":[{"name":"主名","aliases":["别名"],"is_minor":false,"date":"剧情时间或第N楼","turn":楼号数字,"entry":"第一人称正文(150字内)","mood":"心情(限用以下词之一：开心、难过、生气、紧张、平静、困惑、惊讶、思念)","attitude_to_user":"对用户态度","secret":"没说出口的心思","key_events":["关键事件"],"relationship_with_others":{"某角色":"关系描述"}}]}',
+    '{"npcs":[{"name":"主名","aliases":["别名"],"is_minor":false,"date":"剧情时间或第N楼","turn":楼号数字,"entry":"第一人称正文(150字内)","mood":"心情(限用以下词之一：开心、难过、生气、紧张、平静、困惑、惊讶、思念)","attitude_to_user":"对用户态度","secret":"没说出口的心思","key_events":["主体：事件"],"relationship_with_others":{"某角色":"关系描述"}}]}',
   ].filter(Boolean).join('\n');
   // ★ 世界书联动：在函数体顶部异步获取登场角色的世界书设定（loadWorldInfo 为异步 API）
   let _worldbookTxtDiary = '';
