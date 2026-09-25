@@ -845,11 +845,12 @@ async function cdBuildDiaryPrompt(windowFloors, data, s) {
     '- 涉及性爱/暴力等露骨情节时, 只需简洁概括地提及(例如"与他发生了关系"、"被他压制"), 严禁逐字描写动作、器官、体液等露骨细节。日记重在记录"发生了什么和我的感受", 而非还原过程。',
     '- 每篇 entry 控制在 150 字以内, 简洁凝练。',
     '- 在日记正文末尾添加一个符合该角色性格的颜文字(如 (。-ω-)、(*^▽^*)、(´;ω;`)、╮(╯▽╰)╭ 等)。',
+    '- secret 是这段在她心里实际浮起的东西。同一句话，有人记一晚上，有人转头就忘；哪一处落到了她身上，看她在这段和之前记忆里实际表现出来的样子。用她的口吻写那个念头——可以是愉快、在意、疑惑或无所谓，和她表现出来的一样或不一样都可以；念头只到那一处撑得起的分量为止。没有哪一处特别落在她身上时，就写她此刻实际想着的、这段里的事，不必替她找理由或补造事件。',
     '- 复用"已知角色名单"中的主名; 若识别出别名/代称, 归并到已有主名, 并在 aliases 里补充别名。',
     '- 语言: 跟随剧情片段的主要语言。',
     '- 用 is_minor 标记角色重要性: 主角、重要配角、有名有戏份的 NPC 标 false; 仅出场一两句、无关紧要的纯路人标 true。',
     '严格只输出 JSON, 格式:',
-    '{"npcs":[{"name":"主名","aliases":["别名"],"is_minor":false,"presence":"participated|witnessed|mentioned_only|absent","date":"剧情时间或第N楼","turn":楼号数字,"entry":"第一人称正文(150字内)","mood":"心情(限用以下词之一：开心、难过、生气、紧张、平静、困惑、惊讶、思念)","attitude_to_user":"对用户态度","secret":"没说出口的心思","key_events":["主体：事件"],"relationship_with_others":{"某角色":"关系描述"}}]}',
+    '{"npcs":[{"name":"主名","aliases":["别名"],"is_minor":false,"presence":"participated|witnessed|mentioned_only|absent","date":"剧情时间或第N楼","turn":楼号数字,"entry":"第一人称正文(150字内)","mood":"心情(限用以下词之一：开心、难过、生气、紧张、平静、困惑、惊讶、思念)","attitude_to_user":"对用户态度","secret":"她此刻的内心活动","key_events":["主体：事件"],"relationship_with_others":{"某角色":"关系描述"}}]}',
   ].filter(Boolean).join('\n');
   // ★ 世界书联动：在函数体顶部异步获取登场角色的世界书设定（loadWorldInfo 为异步 API）
   let _worldbookTxtDiary = '';
