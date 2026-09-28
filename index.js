@@ -2493,6 +2493,11 @@ async function cdBuildDiaryInjectionText() {
           const attitudeStr = last.attitude_to_user ? `对用户态度：${last.attitude_to_user}` : '';
           const extras = [moodStr, attitudeStr].filter(Boolean).join('，');
           diaryLines.push(`- ${name}${tag}（${dateStr}${extras ? ' ' + extras : ''}）：${last.entry}`);
+          // ★ 心声与关键事件一并注入（2026-09-28）
+          const secretStr = typeof last.secret === 'string' ? last.secret.trim() : '';
+          if (secretStr) diaryLines.push(`  心声：${secretStr}`);
+          const events = Array.isArray(last.key_events) ? last.key_events.map(k => String(k || '').trim()).filter(Boolean) : [];
+          if (events.length) diaryLines.push(`  关键事件：${events.join('；')}`);
         });
       }
       if (diaryLines.length) {
